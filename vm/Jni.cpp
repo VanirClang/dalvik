@@ -19,6 +19,7 @@
  */
 #include "Dalvik.h"
 #include "JniInternal.h"
+#include "Misc.h"
 #include "ScopedPthreadMutexLock.h"
 #include "UniquePtr.h"
 #include "hprof/Hprof.h"
@@ -681,6 +682,31 @@ void dvmDumpJniReferenceTables() {
     self->jniLocalRefTable.dump("JNI local");
     gDvm.jniGlobalRefTable.dump("JNI global");
     dvmDumpReferenceTable(&gDvm.jniPinRefTable, "JNI pinned array");
+}
+
+void dvmDumpJniStats(DebugOutputTarget* target) {
+    dvmPrintDebugMessage(target, "JNI: CheckJNI is %s", gDvmJni.useCheckJni ? "on" : "off");
+    if (gDvmJni.forceCopy) {
+        dvmPrintDebugMessage(target, " (with forcecopy)");
+    }
+    dvmPrintDebugMessage(target, "; workarounds are %s", gDvmJni.workAroundAppJniBugs ? "on" : "off");
+
+    dvmLockMutex(&gDvm.jniPinRefLock);
+    dvmPrintDebugMessage(target, "; pins=%d", dvmReferenceTableEntries(&gDvm.jniPinRefTable));
+    dvmUnlockMutex(&gDvm.jniPinRefLock);
+
+    dvmLockMutex(&gDvm.jniGlobalRefLock);
+    dvmPrintDebugMessage(target, "; globals=%d", gDvm.jniGlobalRefTable.capacity());
+    dvmUnlockMutex(&gDvm.jniGlobalRefLock);
+
+    dvmLockMutex(&gDvm.jniWeakGlobalRefLock);
+    size_t weaks = gDvm.jniWeakGlobalRefTable.capacity();
+    if (weaks > 0) {
+        dvmPrintDebugMessage(target, " (plus %d weak)", weaks);
+    }
+    dvmUnlockMutex(&gDvm.jniWeakGlobalRefLock);
+
+    dvmPrintDebugMessage(target, "\n\n");
 }
 
 /*
@@ -2848,8 +2874,6 @@ static jint attachThread(JavaVM* vm, JNIEnv** p_env, void* thr_args, bool isDaem
         argsCopy.name = NULL;
         argsCopy.group = (jobject) dvmGetMainThreadGroup();
     } else {
-        assert(args->version >= JNI_VERSION_1_2);
-
         argsCopy.version = args->version;
         argsCopy.name = args->name;
         if (args->group != NULL) {
