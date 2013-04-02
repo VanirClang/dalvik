@@ -2755,8 +2755,8 @@ static jobject NewDirectByteBuffer(JNIEnv* env, void* address, jlong capacity) {
         ReportJniError();
     }
 
-    /* create an instance of java.nio.ReadWriteDirectByteBuffer */
-    ClassObject* bufferClazz = gDvm.classJavaNioReadWriteDirectByteBuffer;
+    /* create an instance of java.nio.DirectByteBuffer */
+    ClassObject* bufferClazz = gDvm.classJavaNioDirectByteBuffer;
     if (!dvmIsClassInitialized(bufferClazz) && !dvmInitClass(bufferClazz)) {
         return NULL;
     }
@@ -2767,8 +2767,8 @@ static jobject NewDirectByteBuffer(JNIEnv* env, void* address, jlong capacity) {
     /* call the constructor */
     jobject result = addLocalReference(ts.self(), newObj);
     JValue unused;
-    dvmCallMethod(ts.self(), gDvm.methJavaNioReadWriteDirectByteBuffer_init,
-            newObj, &unused, (jint) address, (jint) capacity);
+    dvmCallMethod(ts.self(), gDvm.methJavaNioDirectByteBuffer_init,
+            newObj, &unused, (jlong) address, (jint) capacity);
     if (dvmGetException(ts.self()) != NULL) {
         deleteLocalReference(ts.self(), result);
         return NULL;
@@ -2786,7 +2786,7 @@ static void* GetDirectBufferAddress(JNIEnv* env, jobject jbuf) {
 
     // All Buffer objects have an effectiveDirectAddress field.
     Object* bufObj = dvmDecodeIndirectRef(ts.self(), jbuf);
-    return (void*) dvmGetFieldInt(bufObj, gDvm.offJavaNioBuffer_effectiveDirectAddress);
+    return (void*) dvmGetFieldLong(bufObj, gDvm.offJavaNioBuffer_effectiveDirectAddress);
 }
 
 /*

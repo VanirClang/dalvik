@@ -27,12 +27,9 @@
 #include <sys/resource.h>
 #include <sys/mman.h>
 #include <signal.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-
-#ifdef HAVE_ANDROID_OS
-#include <dirent.h>
-#endif
 
 #if defined(HAVE_PRCTL)
 #include <sys/prctl.h>
@@ -1311,11 +1308,53 @@ bool dvmCreateInterpThread(Object* threadObj, int reqStackSize)
          * resource limits.  VirtualMachineError is probably too severe,
          * so use OutOfMemoryError.
          */
-        ALOGE("Thread creation failed (err=%s)", strerror(errno));
+
+#if HAVE_ANDROID_OS
+        struct mallinfo malloc_info;
+        malloc_info = mallinfo();
+        ALOGE("Native heap free: %zd of %zd bytes", malloc_info.fordblks, malloc_info.uordblks);
+#endif
+
+        size_t thread_count = 0;
+        DIR* d = opendir("/proc/self/task");
+        if (d != NULL) {
+            dirent* entry = NULL;
+            while ((entry = readdir(d)) != NULL) {
+                char* end;
+                strtol(entry->d_name, &end, 10);
+                if (!*end) {
+                    ++thread_count;
+                }
+            }
+            closedir(d);
+        }
+
+        ALOGE("pthread_create (%d threads) failed: %s", thread_count, strerror(cc));
+
+        // Super-verbose output to help track down http://b/8470684.
+        size_t map_count = 0;
+        FILE* fp = fopen("/proc/self/maps", "r");
+        if (fp != NULL) {
+            char buf[1024];
+            while (fgets(buf, sizeof(buf), fp) != NULL) {
+                ALOGE("/proc/self/maps: %s", buf);
+                ++map_count;
+            }
+            fclose(fp);
+        }
 
         dvmSetFieldObject(threadObj, gDvm.offJavaLangThread_vmThread, NULL);
 
-        dvmThrowOutOfMemoryError("thread creation failed");
+        dvmThrowExceptionFmt(gDvm.exOutOfMemoryError,
+                             "pthread_create (%d threads, %d map entries, "
+#if HAVE_ANDROID_OS
+                             "%zd free of %zd native heap bytes"
+#endif
+                             ") failed: %s", thread_count, map_count,
+#if HAVE_ANDROID_OS
+                             malloc_info.fordblks, malloc_info.uordblks,
+#endif
+                             strerror(cc));
         goto fail;
     }
 
@@ -1658,7 +1697,7 @@ bool dvmCreateInternalThread(pthread_t* pHandle, const char* name,
     int cc = pthread_create(pHandle, &threadAttr, internalThreadStart, pArgs);
     pthread_attr_destroy(&threadAttr);
     if (cc != 0) {
-        ALOGE("internal thread creation failed");
+        ALOGE("internal thread creation failed: %s", strerror(cc));
         free(pArgs->name);
         free(pArgs);
         return false;
@@ -2145,17 +2184,14 @@ void dvmDetachCurrentThread()
         gDvm.nonDaemonThreadCount--;        // guarded by thread list lock
 
         if (gDvm.nonDaemonThreadCount == 0) {
-            int cc;
-
             ALOGV("threadid=%d: last non-daemon thread", self->threadId);
             //dvmDumpAllThreads(false);
             // cond var guarded by threadListLock, which we already hold
-            cc = pthread_cond_signal(&gDvm.vmExitCond);
-            assert(cc == 0);
-#ifdef NDEBUG
-            // not used -> variable defined but not used warning
-            (void)cc;
-#endif
+            int cc = pthread_cond_signal(&gDvm.vmExitCond);
+            if (cc != 0) {
+                ALOGE("pthread_cond_signal(&gDvm.vmExitCond) failed: %s", strerror(cc));
+                dvmAbort();
+            }
         }
     }
 
@@ -2633,7 +2669,6 @@ void dvmResumeAllThreads(SuspendCause why)
 {
     Thread* self = dvmThreadSelf();
     Thread* thread;
-    int cc;
 
     lockThreadSuspend("res-all", why);  /* one suspend/resume at a time */
     LOG_THREAD("threadid=%d: ResumeAll starting", self->threadId);
@@ -2711,12 +2746,11 @@ void dvmResumeAllThreads(SuspendCause why)
      * which may choose to wake up.  No need to wait for them.
      */
     lockThreadSuspendCount();
-    cc = pthread_cond_broadcast(&gDvm.threadSuspendCountCond);
-    assert(cc == 0);
-#ifdef NDEBUG
-    // not used -> variable defined but not used warning
-    (void)cc;
-#endif
+    int cc = pthread_cond_broadcast(&gDvm.threadSuspendCountCond);
+    if (cc != 0) {
+        ALOGE("pthread_cond_broadcast(&gDvm.threadSuspendCountCond) failed: %s", strerror(cc));
+        dvmAbort();
+    }
     unlockThreadSuspendCount();
 
     LOG_THREAD("threadid=%d: ResumeAll complete", self->threadId);
@@ -2730,7 +2764,6 @@ void dvmUndoDebuggerSuspensions()
 {
     Thread* self = dvmThreadSelf();
     Thread* thread;
-    int cc;
 
     lockThreadSuspend("undo", SUSPEND_FOR_DEBUG);
     LOG_THREAD("threadid=%d: UndoDebuggerSusp starting", self->threadId);
@@ -2764,12 +2797,11 @@ void dvmUndoDebuggerSuspensions()
      * which may choose to wake up.  No need to wait for them.
      */
     lockThreadSuspendCount();
-    cc = pthread_cond_broadcast(&gDvm.threadSuspendCountCond);
-    assert(cc == 0);
-#ifdef NDEBUG
-    // not used -> variable defined but not used warning
-    (void)cc;
-#endif
+    int cc = pthread_cond_broadcast(&gDvm.threadSuspendCountCond);
+    if (cc != 0) {
+        ALOGE("pthread_cond_broadcast(&gDvm.threadSuspendCountCond) failed: %s", strerror(cc));
+        dvmAbort();
+    }
     unlockThreadSuspendCount();
 
     unlockThreadSuspend();
@@ -3495,10 +3527,7 @@ void dvmDumpAllThreadsEx(const DebugOutputTarget* target, bool grabLock)
     }
 
 #ifdef HAVE_ANDROID_OS
-    char path[64];
-    snprintf(path, sizeof(path), "/proc/%d/task", getpid());
-
-    DIR* d = opendir(path);
+    DIR* d = opendir("/proc/self/task");
     if (d != NULL) {
         dirent* entry = NULL;
         bool first = true;
