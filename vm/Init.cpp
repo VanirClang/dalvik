@@ -33,6 +33,7 @@
 #include "test/Test.h"
 #include "mterp/Mterp.h"
 #include "Hash.h"
+#include "JniConstants.h"
 
 #if defined(WITH_JIT)
 #include "compiler/codegen/Optimizer.h"
@@ -1624,6 +1625,9 @@ static bool registerSystemNatives(JNIEnv* pEnv)
     // Must set this before allowing JNI-based method registration.
     self->status = THREAD_NATIVE;
 
+    // First set up JniConstants, which is used by libcore.
+    JniConstants::init(pEnv);
+
     // Most JNI libraries can just use System.loadLibrary, but you can't
     // if you're the library that implements System.loadLibrary!
     loadJniLibrary("javacore");
@@ -2120,17 +2124,6 @@ void dvmAbort()
      */
     dvmPrintNativeBackTrace();
 
-    /*
-     * If we call abort(), all threads in the process receives a SIBABRT.
-     * debuggerd dumps the stack trace of the main thread, whether or not
-     * that was the thread that failed.
-     *
-     * By stuffing a value into a bogus address, we cause a segmentation
-     * fault in the current thread, and get a useful log from debuggerd.
-     * We can also trivially tell the difference between a VM crash and
-     * a deliberate abort by looking at the fault address.
-     */
-    *((char*)0xdeadd00d) = result;
     abort();
 
     /* notreached */
