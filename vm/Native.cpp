@@ -411,14 +411,14 @@ bool dvmLoadNativeCode(const char* pathName, Object* classLoader,
         if (verbose)
             ALOGD("Added shared lib %s %p", pathName, classLoader);
 
-        bool result = true;
+        bool result = false;
         void* vonLoad;
         int version;
 
         vonLoad = dlsym(handle, "JNI_OnLoad");
         if (vonLoad == NULL) {
-            ALOGD("No JNI_OnLoad found in %s %p, skipping init",
-                pathName, classLoader);
+            ALOGD("No JNI_OnLoad found in %s %p, skipping init", pathName, classLoader);
+            result = true;
         } else {
             /*
              * Call JNI_OnLoad.  We have to override the current class
@@ -452,11 +452,12 @@ bool dvmLoadNativeCode(const char* pathName, Object* classLoader,
                  * newly-registered native method calls.  We could try to
                  * unregister them, but that doesn't seem worthwhile.
                  */
-                result = false;
             } else {
-                if (gDvm.verboseJni) {
-                    ALOGI("[Returned from JNI_OnLoad for \"%s\"]", pathName);
-                }
+                result = true;
+            }
+            if (gDvm.verboseJni) {
+                ALOGI("[Returned %s from JNI_OnLoad for \"%s\"]",
+                      (result ? "successfully" : "failure"), pathName);
             }
         }
 
